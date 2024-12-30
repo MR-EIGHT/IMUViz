@@ -8,6 +8,12 @@ import os
 from dash.dependencies import Input, Output, State
 import glob
 
+from uncertainty import *
+from possibility import *
+from plots import *
+# from segmentation import *
+
+
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Interactive MRI Uncertainty Visualizer"
 
@@ -128,7 +134,8 @@ def handle_upload_and_slice(upload_complete, z_index, filenames):
             slice_image = loaded_image_data[:, :, middle_slice]
 
             # Simulated uncertainty data (same dimensions as the slice)
-            uncertainty_map = np.random.random(slice_image.shape) * 100  # Example values
+            uncertainty_map = heuristic_uncertainty_detection(slice_image)
+
 
             fig = px.imshow(slice_image, color_continuous_scale='gray', title=f"Z-Slice: {middle_slice}")
             fig.update_layout(height=600, width=600, margin=dict(l=0, r=0, t=30, b=0))
@@ -157,7 +164,7 @@ def handle_upload_and_slice(upload_complete, z_index, filenames):
     elif triggered_id == "slice-slider" and loaded_image_data is not None:
         slice_image = loaded_image_data[:, :, z_index]
         # Simulated uncertainty data (same dimensions as the slice)
-        uncertainty_map = np.random.random(slice_image.shape) * 100  # Example values
+        uncertainty_map = heuristic_uncertainty_detection(slice_image)
         fig = px.imshow(slice_image, color_continuous_scale='gray', title=f"Z-Slice: {z_index}")
         fig.update_layout(height=600, width=600, margin=dict(l=0, r=0, t=30, b=0))
         fig.update_traces(
@@ -209,22 +216,57 @@ def show_possible_outcomes(relayout_data, z_index):
 
     # Generate multiple possible outcomes
     outcomes = []
-    for i in range(3):  # Simulate 5 possible outcomes
-        modified_region = zoomed_region + np.random.normal(0, 3, zoomed_region.shape)
-        fig = px.imshow(
-            modified_region,
-            color_continuous_scale="Viridis",
-            title=f"Outcome {i+1}"
-        )
+
+
+    normalized_image = (zoomed_region - np.min(zoomed_region)) / (np.max(zoomed_region) - np.min(zoomed_region))
+
+    # uncertainty_map = heuristic_uncertainty_detection(zoomed_region)
+    intensity_map = detect_uncertainty_intensity_variation(normalized_image)
+    gradient_map = detect_uncertainty_gradient(normalized_image)
+    noise_map = detect_uncertainty_noise_blur(normalized_image)
+
+    # Visualize results
+    intensity_fig = visualize_intensity_variation(intensity_map)
+    gradient_fig = visualize_gradient_uncertainty(gradient_map)
+    noise_fig = visualize_noise_blur_uncertainty(noise_map)
+    
+    # Adjust layout for better visualization
+    for fig in [intensity_fig, gradient_fig, noise_fig]:
         fig.update_layout(
             coloraxis_showscale=False,
             margin=dict(l=0, r=0, t=30, b=0),  # Remove extra space
-            xaxis_visible=True,  # Hide X-axis
-            yaxis_visible=True,  # Hide Y-axis
-            height=300,  # Dynamically adjust to fit
+            xaxis_visible=True,
+            yaxis_visible=True,
+            height=300,
             width=300
         )
-        outcomes.append(dcc.Graph(figure=fig, style={"margin": "5px", "height": "300px", "width": "300px"}))
+
+    outcomes.extend([
+        dcc.Graph(figure=intensity_fig, style={"margin": "5px", "height": "300px", "width": "300px"}),
+        dcc.Graph(figure=gradient_fig, style={"margin": "5px", "height": "300px", "width": "300px"}),
+        dcc.Graph(figure=noise_fig, style={"margin": "5px", "height": "300px", "width": "300px"}),
+    ])
+
+    # Generate probabilistic overlay for uncertainty visualization
+    uncertainty_map = (intensity_map + gradient_map + noise_map) / 3  # Example of combining maps
+    uncertainty_map = np.clip(uncertainty_map, 0, 1)  # Ensure values are in [0, 1]
+
+    # Overlay the uncertainty map on the zoomed region
+    prob_overlay = overlay_prob_map(normalized_image, uncertainty_map)
+
+    # Convert the overlay to a Plotly figure
+    prob_overlay_fig = px.imshow(prob_overlay, title="Probabilistic Overlay", color_continuous_scale="viridis")
+    prob_overlay_fig.update_layout(
+        margin=dict(l=0, r=0, t=30, b=0),
+        height=300,
+        width=300
+    )
+
+
+    # Append visualizations to outcomes
+    outcomes.extend([
+        dcc.Graph(figure=prob_overlay_fig, style={"margin": "5px", "height": "300px", "width": "300px"}),
+    ])
 
     return html.Div(outcomes, style={"display": "flex", "flexWrap": "wrap", "justifyContent": "center"})
 
