@@ -7,6 +7,8 @@ import plotly.express as px
 import os
 from dash.dependencies import Input, Output, State
 import glob
+from skimage.util import img_as_ubyte
+
 
 from uncertainty import *
 from possibility import *
@@ -60,31 +62,54 @@ app.layout = html.Div([
             'padding': '20px',
         }
     ),
-    
-html.Div(
-    id='output-image-upload',
-    style={
-        'display': 'flex',               # Use flexbox for layout
-        'justifyContent': 'center',      # Center horizontally
-        'alignItems': 'center',          # Center vertically
-        'margin': 'auto',                # Automatically set margins for centering
-        'borderRadius': '10px',          # Rounded corners
-    }
-),
- # Panel for Outcome Explorer
-    html.Div(
-        id="outcome-explorer",
-        children=[
-            html.H3("Possible Outcomes", style={'textAlign': 'center'}),
-            html.Div(
-                id="outcomes-panel",
-                style={'display': 'flex', 'flexWrap': 'wrap', 'justifyContent': 'center'}
-            )
-        ],
-        style={'width': '80%', 'margin': '20px'}
-    ),
 
+    # Main layout with two columns
+    html.Div(
+        style={
+            'display': 'flex',
+            'justifyContent': 'space-around',
+            'alignItems': 'flex-start',
+            'marginTop': '20px',
+        },
+        children=[
+            # Left column for the main MRI image
+            html.Div(
+                id='output-image-upload',
+                style={
+                    'width': '45%',  # Takes up 45% of the width
+                    'display': 'flex',
+                    'justifyContent': 'center',
+                    'alignItems': 'center',
+                    'border': '1px solid #ccc',
+                    'borderRadius': '10px',
+                    'padding': '10px',
+                }
+            ),
+
+            # Right column for uncertainty visualizations
+            html.Div(
+                style={'width': '45%'},  # Takes up 45% of the width
+                children=[
+                    html.Div(
+                        id='outcomes-panel',
+                        style={
+                            'border': '1px solid #ccc',
+                            'borderRadius': '10px',
+                            'marginBottom': '20px',
+                            'padding': '10px',
+                        }
+                    ),
+                    dcc.Graph(
+                        id='uncertainty-histogram',
+                        style={'height': '300px', 'margin': '0 auto'},
+                        config={'displayModeBar': False},
+                    ),
+                ]
+            ),
+        ]
+    ),
 ])
+
 
 loaded_image_data = None
 
@@ -213,12 +238,12 @@ def show_possible_outcomes(relayout_data, z_index):
     
         # Extract the region from the loaded data
     zoomed_region = loaded_image_data[min(y_min,y_max):max(y_min,y_max), min(x_min,x_max):max(x_min,x_max), z_index]
-
     # Generate multiple possible outcomes
     outcomes = []
 
 
     normalized_image = (zoomed_region - np.min(zoomed_region)) / (np.max(zoomed_region) - np.min(zoomed_region))
+    normalized_image = img_as_ubyte(normalized_image)
 
     # uncertainty_map = heuristic_uncertainty_detection(zoomed_region)
     intensity_map = detect_uncertainty_intensity_variation(normalized_image)
@@ -269,6 +294,66 @@ def show_possible_outcomes(relayout_data, z_index):
     ])
 
     return html.Div(outcomes, style={"display": "flex", "flexWrap": "wrap", "justifyContent": "center"})
+
+
+
+
+
+
+@app.callback(
+    Output('uncertainty-histogram', 'figure'),
+    [Input("graph-image", "relayoutData"), Input("slice-slider", "value")],
+    prevent_initial_call=True
+)
+def update_histogram(relayout_data, slice_value):
+    global loaded_image_data  # Ensure this is loaded and accessible
+
+    if loaded_image_data is None:
+        return px.histogram([], nbins=10, title="Uncertainty Histogram")
+
+    # # Handle no zoom or missing data
+    # if not relayout_data or 'xaxis.range' not in relayout_data or 'yaxis.range' not in relayout_data:
+    #     uncertainty_data = heuristic_uncertainty_detection(loaded_image_data[:, :, slice_value])
+    #     return px.histogram(uncertainty_data.flatten(), nbins=10, title="Uncertainty Histogram")
+
+
+    try:
+        x_min = int(relayout_data['xaxis.range[0]'])
+        x_max = int(relayout_data['xaxis.range[1]'])
+        y_min = int(relayout_data['yaxis.range[0]'])
+        y_max = int(relayout_data['yaxis.range[1]'])
+
+    except KeyError:
+        return html.Div("Zoom into the image to see possible outcomes.")
+    
+        # Extract the region from the loaded data
+    zoomed_region = loaded_image_data[min(y_min,y_max):max(y_min,y_max), min(x_min,x_max):max(x_min,x_max), slice_value]
+
+    normalized_image = (zoomed_region - np.min(zoomed_region)) / (np.max(zoomed_region) - np.min(zoomed_region))
+    normalized_image = img_as_ubyte(normalized_image)
+
+    # Detect uncertainty and generate histogram
+    uncertainty_data = heuristic_uncertainty_detection(normalized_image)
+    cropped_uncertainties = uncertainty_data.flatten()
+
+     # Filter invalid values
+    uncertainty_values = cropped_uncertainties[cropped_uncertainties <= 1]
+
+    # Generate histogram
+    fig = px.histogram(
+        uncertainty_values,
+        x=uncertainty_values,
+        nbins=20,
+        title="Uncertainty Histogram",
+        color_discrete_sequence=["blue"]
+    )
+    fig.update_layout(
+        xaxis_title="Uncertainty Value",
+        yaxis_title="Frequency",
+        legend=dict(visible=False),
+        plot_bgcolor="rgba(0, 0, 0, 0)"
+    )
+    return fig
 
 
 
